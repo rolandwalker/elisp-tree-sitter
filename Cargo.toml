@@ -11,4 +11,5 @@ lto = "thin"
 opt-level = 0
 
 [patch.crates-io.tree-sitter]
-git = "https://github.com/tree-sitter/tree-sitter"
+git = "https://github.com/ubolonton/tree-sitter"
+branch = "improve-text-provider"
