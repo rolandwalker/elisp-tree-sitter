@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 - Upgraded `tree-sitter` crate to 0.20.0, which:
   + Changed the semantics of range-restricted query to report matches that intersect the range, instead of only fully-contained matches. See [tree-sitter#1130](https://github.com/tree-sitter/tree-sitter/pull/1130).
+- Disabled query-region extension, to improve performance. Added a flag to turn it back on: `tree-sitter-hl-enable-query-region-extension`.
 
 ## [0.15.1] - 2021-03-20
 - Fixed some invalid query patterns [causing SIGABRT](https://github.com/ubolonton/emacs-tree-sitter/issues/125), by upgrading `tree-sitter` crate.
