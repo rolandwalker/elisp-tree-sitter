@@ -21,17 +21,17 @@ jobs:
         os:
           # - macos-10.15
           - ubuntu-18.04
-          # - ubuntu-20.04
+          - ubuntu-20.04
         emacs-version:
-          # - '25.3'
-          # - '26.3'
+          - '25.3'
+          - '26.3'
           - '27.2'
-        # include:
-        #   # Older Emacs binaries for Windows don't have dynamic modules enabled.
-        #   - os: windows-2016
-        #     emacs-version: '27.2'
-        #   - os: windows-2019
-        #     emacs-version: '27.2'
+        include:
+          # Older Emacs binaries for Windows don't have dynamic modules enabled.
+          - os: windows-2016
+            emacs-version: '27.2'
+          # - os: windows-2019
+          #   emacs-version: '27.2'
     runs-on: ${{ matrix.os }}
     steps:
       - name: Set up Rust
@@ -77,10 +77,24 @@ jobs:
         with:
           node-version: '12'
 
-      - name: Install tree-sitter CLI
+      - name: Set up tree-sitter CLI
         run: npm install -g tree-sitter-cli@0.19.3
 
       - uses: mxschmitt/action-tmate@v3
+        if: runner.os == 'Windows'
         name: Setup tmate session
 
       - run: ./bin/test
+        if: runner.os != 'Linux'
+
+      - run: ./bin/test
+        if: runner.os == 'Linux'
+        env:
+          # Got this error on Linux when trying to load python.so:`Language load failed:
+          # "libstdc++.so.6: cannot open shared object file: No such file or directory"`. It's
+          # probably due to nix doing something funny with linking.
+          #
+          # -`ldd` can load python.so, and shows the correct path.
+          # - Installing gcc with nix add resolevs this issue, but then causes problem with loading
+          # libc.
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libstdc++.so.6
