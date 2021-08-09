@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - ci
+    paths-ignore:
+      - doc/**
+  pull_request:
+    branches:
+      - master
+    paths-ignore:
+      - doc/**
+
+jobs:
+  ci:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-10.15
+          - ubuntu-18.04
+          - ubuntu-20.04
+        emacs-version:
+          - '25.3'
+          - '26.3'
+          - '27.2'
+        include:
+          # Older Emacs binaries for Windows don't have dynamic modules enabled.
+          - os: windows-2016
+            emacs-version: '27.2'
+          - os: windows-2019
+            emacs-version: '27.2'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Set up Rust
+        run: |
+          rustup install stable
+          rustc -Vv
+          cargo -V
+
+      - name: Set up LLVM
+        if: runner.os == 'Windows'
+        run: |
+          choco install llvm --version 8.0.0
+          echo "LIBCLANG_PATH=$env:SystemDrive\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - uses: purcell/setup-emacs@v3.0
+        if: runner.os != 'Windows'
+        with:
+          version: ${{ matrix.emacs-version }}
+      - uses: jcs090218/setup-emacs-windows@v4
+        if: runner.os == 'Windows'
+        with:
+          version: ${{ matrix.emacs-version }}
+
+      - name: Set up cask
+        if: runner.os != 'Windows'
+        run: |
+          git clone -b azure-pipelines https://github.com/ubolonton/cask "$HOME"/.cask
+          echo "$HOME/.cask/bin" >> $GITHUB_PATH
+      - name: Set up cask (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          git clone -b azure-pipelines https://github.com/ubolonton/cask "$env:UserProfile\.cask"
+          echo "$env:UserProfile\.cask\bin" >> $GITHUB_PATH
+
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - run: ./bin/setup
+      - run: ./bin/build release
+
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '12'
+
+      - name: Install tree-sitter CLI
+        run: npm install -g tree-sitter-cli@0.19.3
+
+      - run: ./bin/test
