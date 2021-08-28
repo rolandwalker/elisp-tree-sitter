@@ -50,20 +50,26 @@ Example setting:
   (or tsc-dyn-dir
       (error "Could not locate the directory for `tsc-dyn'")))
 
-(defun tsc-dyn-get--file ()
-  (let ((ext (pcase system-type
-               ('windows-nt "dll")
-               ('darwin "dylib")
-               ('gnu/linux "so")
-               (_ (error "Unsupported system-type %s" system-type)))))
-    (format "tsc-dyn.%s" ext)))
-
-(defun tsc-dyn-get--out-file ()
+(defun tsc-dyn-get--ext ()
+  "Return the dynamic module extension, which is system-dependent."
   (pcase system-type
-    ('windows-nt "tsc_dyn.dll")
-    ('darwin "libtsc_dyn.dylib")
-    ('gnu/linux "libtsc_dyn.so")
-    (_ (error "Unsupported system-type %s" system-type))))
+    ('windows-nt "dll")
+    ('darwin "dylib")
+    ((or 'gnu 'gnu/linux 'gnu/kfreebsd) "so")
+    ((or 'ms-dos 'cygwin) (error "Unsupported system-type %s" system-type))
+    (_ "so")))
+
+(defun tsc-dyn-get--file ()
+  "Return the dynamic module filename, which is system-dependent."
+  (format "tsc-dyn.%s" (tsc-dyn-get--ext)))
+
+;; TODO: Remove this when cargo allows specifying output file name.
+(defun tsc-dyn-get--out-file ()
+  "Return cargo's output filename, which is system-dependent."
+  (let ((base (pcase system-type
+                ('windows-nt "tsc_dyn")
+                (_ "libtsc_dyn"))))
+    (format "%s.%s" base (tsc-dyn-get--ext))))
 
 (defun tsc-dyn-get--download (version)
   "Download the pre-compiled VERSION of `tsc-dyn' module."
@@ -87,49 +93,57 @@ Example setting:
       (let ((coding-system-for-write 'utf-8))
         (insert version)))))
 
+(defmacro tsc-dyn-get--compilation-to-stdout (condition &rest body)
+  "Eval BODY forms with compilation output conditionally redirected to `princ'."
+  (declare (indent 1))
+  (if condition
+      (let ((print-stdout (make-symbol "print-stdout")))
+        `(let ((,print-stdout (lambda (_proc string) (princ string))))
+           (advice-add 'compilation-filter :override ,print-stdout)
+           (unwind-protect
+               (progn ,@body)
+             (advice-remove 'compilation-filter ,print-stdout))))
+    `(progn ,@body)))
+
 (defun tsc-dyn-get--build (&optional dir)
   "Build the dynamic module `tsc-dyn' from source."
   (unless dir (setq dir tsc-dyn-dir))
-  (when noninteractive
-    (define-advice compilation-filter (:after (_proc string))
-      ;; (message "Hello")
-      (princ string)))
-  (let* ((default-directory dir)
-         proc
-         (compilation-start-hook (lambda (p) (message "STARTING") (setq proc p)))
-         (compilation-auto-jump-to-first-error nil)
-         (compilation-scroll-output t)
-         (comp-buffer (compilation-start
-                       "cargo build --release"
-                       nil (lambda (_) "*compilation tsc-dyn*"))))
-    (if-let ((window (get-buffer-window comp-buffer)))
-        (select-window window)
-      (pop-to-buffer comp-buffer))
-    (with-current-buffer comp-buffer
-      (setq-local compilation-error-regexp-alist nil)
-      (add-hook 'compilation-finish-functions
-        (lambda (_buffer status)
-          (unless (string= status "finished\n")
-            (error "Compiling tsc-dyn failed with status: %s" status))
-          (message "Cleaning up")
-          ;; TODO: Ask if the file exists.
-          (let ((file (tsc-dyn-get--file)))
-            (when (file-exists-p file)
-              (delete-file file))
-            (rename-file (format "target/release/%s" (tsc-dyn-get--out-file))
-                         file))
-          (delete-directory "target" :recursive))
-        nil :local)
-      (unless noninteractive
-        (when (functionp 'ansi-color-apply-on-region)
-          (add-hook 'compilation-filter-hook
-            (lambda () (ansi-color-apply-on-region ;; compilation-filter-start
-                   (point-min)
-                   (point-max)))))))
-    (when noninteractive
-      (while (not (memq (process-status proc) '(exit failed signal)))
-        (sleep-for 0.1))
-      (message "DONE"))))
+  (tsc-dyn-get--compilation-to-stdout noninteractive
+    (let* ((default-directory dir)
+           proc
+           (compilation-start-hook (lambda (p) (setq proc p)))
+           (compilation-auto-jump-to-first-error nil)
+           (compilation-scroll-output t)
+           (comp-buffer (compilation-start
+                         "cargo build --release"
+                         nil (lambda (_) "*tsc-dyn compilation*"))))
+      (if-let ((window (get-buffer-window comp-buffer)))
+          (select-window window)
+        (pop-to-buffer comp-buffer))
+      (with-current-buffer comp-buffer
+        (setq-local compilation-error-regexp-alist nil)
+        (add-hook 'compilation-finish-functions
+          (lambda (_buffer status)
+            (unless (string= status "finished\n")
+              (error "Compiling tsc-dyn failed with status: %s" status))
+            (message "Cleaning up")
+            ;; TODO: Ask if the file exists.
+            (let ((file (tsc-dyn-get--file)))
+              (when (file-exists-p file)
+                (delete-file file))
+              (rename-file (format "target/release/%s" (tsc-dyn-get--out-file))
+                           file))
+            (delete-directory "target" :recursive))
+          nil :local)
+        (unless noninteractive
+          (when (functionp 'ansi-color-apply-on-region)
+            (add-hook 'compilation-filter-hook
+              (lambda () (ansi-color-apply-on-region ;; compilation-filter-start
+                     (point-min)
+                     (point-max)))))))
+      (when noninteractive
+        (while (not (memq (process-status proc) '(exit failed signal)))
+          (sleep-for 0.1))))))
 
 (defun tsc--try-load-dyn (file)
   "Try loading `tsc-dyn' from FILE. Return nil if the file does not exist."
@@ -184,9 +198,9 @@ If it's not found, try to download it."
                 (version< current-version version))
         (tsc-dyn-get--download version))))
   (let ((load-path (nconc `(,tsc-dyn-dir) load-path)))
-    ;; XXX: We want a universal package containing binaries for all platforms, so
-    ;; we use a unique extension for each. On macOS, we use`.dylib', which is more
-    ;; sensible than `.so' anyway.
+    ;; XXX: We wanted a universal package containing binaries for all platforms,
+    ;; so we used a unique extension for each. On macOS, we use`.dylib', which
+    ;; is more sensible than `.so' anyway.
     (unless (featurep 'tsc-dyn)
       (when (eq system-type 'darwin)
         (tsc--mac-load-dyn)))
